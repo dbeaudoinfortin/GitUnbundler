@@ -36,8 +36,8 @@ public class GitUnbundle {
 	private static final Path bundlePath    = Paths.get(BUNDLE_PATH); 
 	private static final Path unbundledPath = Paths.get(UNBUNDLED_PATH);
 	
-	private static final int                THREAD_COUNT = 10;
-	private static final ThreadPoolExecutor THREAD_POOL = new ThreadPoolExecutor(THREAD_COUNT,THREAD_COUNT,100l,TimeUnit.SECONDS, new LinkedBlockingDeque<Runnable>());
+	private static final int                THREAD_COUNT = Runtime.getRuntime().availableProcessors();
+	private static final ThreadPoolExecutor THREAD_POOL  = new ThreadPoolExecutor(THREAD_COUNT,THREAD_COUNT,100l,TimeUnit.SECONDS, new LinkedBlockingDeque<Runnable>());
 	private static final AtomicInteger      THREAD_ID_COUNTER = new AtomicInteger(0);
 	
 	private static final int TAR_BUFFER_SIZE = 1024*1024*10; //File is big
