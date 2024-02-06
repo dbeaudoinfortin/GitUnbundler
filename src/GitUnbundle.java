@@ -8,9 +8,11 @@ import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.StringTokenizer;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -72,59 +74,37 @@ public class GitUnbundle {
 				 
 				@Override
 				public void run() {
-				 
-					Process process = null;
-					BufferedReader stdInput = null;
-					BufferedReader stdError = null;
-				 
 					int threadId = THREAD_ID_COUNTER.getAndIncrement();
 				 
 					try {
 						System.out.println(threadId + ":: Creating git repo in: " + unbundledDir);
-						process = Runtime.getRuntime().exec("git init", null, unbundledDir);
-						stdInput = new BufferedReader(new InputStreamReader(process.getInputStream()));
-						stdError = new BufferedReader(new InputStreamReader(process.getErrorStream()));
+						final String cmd = "git init";
 						
-						if(process.waitFor() > 0) {
+						if(runProcess(threadId, cmd, unbundledDir) > 0) {
 							System.out.println(threadId + ":: Git repo creation failed in: " + unbundledDir);
-							printErrorMessages(threadId, stdInput, stdError);
 							return;
 						} else {
 							System.out.println(threadId + ":: Git repo created in: " + unbundledDir);
-							printErrorMessages(threadId, stdInput, stdError);
 						}
 					 } catch (Throwable t) {
 						System.out.println(threadId + ":: ERROR during git init command: " + t.getMessage());
 						t.printStackTrace();
 						return; //Don't throw a runtime exception, let the other threads run
-					 } finally {
-						if (null != process) process.destroy();
 					 }
 				 
 					 try {
 							
 						System.out.println(threadId + ":: Unbundling file: " + bundleFile);
-						String cmd = "git pull \"" + bundleFile.getAbsolutePath() + "\"";
-						System.out.println(threadId + ":: Running command: " + cmd);
-						
-						process = Runtime.getRuntime().exec(cmd, null, unbundledDir);
-						stdInput = new BufferedReader(new InputStreamReader(process.getInputStream()));
-						stdError = new BufferedReader(new InputStreamReader(process.getErrorStream()));
-						printErrorMessages(threadId, stdInput, stdError);
-						
-						if(process.waitFor() > 0) {
+						final String cmd = "git pull --progress \"" + bundleFile.getAbsolutePath() + "\"";
+						if(runProcess(threadId, cmd, unbundledDir) > 0) {
 							System.out.println(threadId + ":: Unbundling failed for bundle: " + bundleFile);
 						} else {
 							System.out.println(threadId + ":: Unbundling succeeded, deleting bundle: " + bundleFile);
 							bundleFile.delete();
 						}
-						printErrorMessages(threadId, stdInput, stdError);
-						
 					} catch (Throwable t) {
 						System.out.println(threadId + ":: ERROR during git unbundling: " + t.getMessage());
 						t.printStackTrace(); //Don't throw a runtime exception, let the other threads run
-					} finally {
-						if (null != process) process.destroy();
 					}
 				}
 			}));
@@ -133,13 +113,49 @@ public class GitUnbundle {
 		waitForTaskCompletion(futures);
 	}
 	
-	private static void printErrorMessages(int threadId, BufferedReader stdInput, BufferedReader stdError) throws IOException {
-		System.out.println(threadId + ":: Exit messages:");
+	private static int runProcess(int threadId, String command, File directory) throws IOException, InterruptedException {
+		System.out.println(threadId + ":: Running command: " + command);
+		
+		StringTokenizer st = new StringTokenizer(command);
+        String[] cmdarray = new String[st.countTokens()];
+        for (int i = 0; st.hasMoreTokens(); i++) cmdarray[i] = st.nextToken();
+        
+        final Process process = new ProcessBuilder(cmdarray)
+	            .directory(directory)
+	            .redirectErrorStream(true)
+	            .start();
+        try {
+    		//Launch a separate thread to read the process output while waiting for it to terminate
+    		Thread readerThread = new Thread("Proc-Reader-" + threadId) {
+    			
+    			@Override
+    			public void run() {
+    				try(final BufferedReader stdInput = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+    					printErrorMessages(threadId, stdInput);
+    				}catch (Throwable t) {
+    					System.out.println(threadId + ":: Failed to read process output:" + t.getMessage());
+    				}
+    			}
+    		};
+    		readerThread.start();
+    		
+    		//Wait for the main process to finish
+    		process.waitFor();
+    		
+    		//Wait for the input stream reader thread to finish reading
+    		if(!readerThread.join(Duration.ofSeconds(60))) {
+    			System.out.println(threadId + ":: Reader thread is hung. Forcefully terminating.");
+    			readerThread.interrupt();
+    		}
+    		return process.exitValue();
+        } finally {
+        	if (null != process) process.destroy(); 
+        }
+	}
+	
+	private static void printErrorMessages(int threadId, BufferedReader stdInput) throws IOException {
 		String s = null;
 		while ((s = stdInput.readLine()) != null) {
-		    System.out.println(threadId + ":: " + s);
-		}
-		while ((s = stdError.readLine()) != null) {
 		    System.out.println(threadId + ":: " + s);
 		}
 	}
