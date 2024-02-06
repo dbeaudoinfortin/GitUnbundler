@@ -1,7 +1,10 @@
+import java.io.BufferedInputStream;
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -14,29 +17,39 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
 import org.apache.commons.io.FileUtils;
 
 public class GitUnbundle {
 
-
-	private static final String RAW_EXPORT_PATH     = "C:\\git\\@hashed\\";
+	
+	private static final String RAW_EXPORT_PATH     = "C:\\git\\test\\test.tar";
 	private static final String BUNDLE_PATH         = "C:\\git\\";
 	private static final String UNBUNDLED_PATH      = "C:\\git\\repos\\";
 	
+	private static final Path rawExportPath = Paths.get(RAW_EXPORT_PATH);
 	private static final Path bundlePath    = Paths.get(BUNDLE_PATH); 
 	private static final Path unbundledPath = Paths.get(UNBUNDLED_PATH);
 	
-	private static final int                THREAD_COUNT = 24;
+	private static final int                THREAD_COUNT = 32;
 	private static final ThreadPoolExecutor THREAD_POOL = new ThreadPoolExecutor(THREAD_COUNT,THREAD_COUNT,100l,TimeUnit.SECONDS, new LinkedBlockingDeque<Runnable>());
 	private static final AtomicInteger      THREAD_ID_COUNTER = new AtomicInteger(0);
 	
+	private static final int TAR_BUFFER_SIZE = 1024*1024*10; //File is big
+	
 	public static void main(String[] args) throws IOException {
-		moveFiles();
-		createDirs();
-		unbundle();
-		
-		THREAD_POOL.shutdown();
-		System.out.println("All done. Bye :)");
+		try {
+			flattenRawExport(rawExportPath, bundlePath);
+			createBundleDirs();
+			unbundle();
+			
+			THREAD_POOL.shutdown();
+			System.out.println("All done. Bye :)");
+		} catch (Throwable t) {
+			System.out.println("Error: " + t.getMessage());
+			t.printStackTrace();
+		}
 	}
 	
 	private static void unbundle() throws IOException {
@@ -133,7 +146,7 @@ public class GitUnbundle {
 		}
 	}
 	
-	private static void createDirs() throws IOException {
+	private static void createBundleDirs() throws IOException {
 		List<Future<?>> futures = new ArrayList<Future<?>>();
 		
 		Files.list(bundlePath).forEach(path -> {
@@ -149,8 +162,6 @@ public class GitUnbundle {
 				@Override
 	            public void run() {
 					int threadId = THREAD_ID_COUNTER.getAndIncrement();
-					
-					
 					
 					File newDir = unbundledPath.resolve(bundleFile.getName().substring(0, index)).toFile();
 					if(newDir.exists()) {
@@ -184,25 +195,85 @@ public class GitUnbundle {
 		System.out.println("All directories created.");
 	}
 	
-	private static void moveFiles() throws IOException {
-		Path root = Paths.get(RAW_EXPORT_PATH);
-		if(!root.toFile().exists()) return;
+	private static void flattenRawExport(Path rootPath, Path flattenedPath) throws IOException {
 		
-		Files.find(root, 4, (path, attr) -> {
-			System.out.println("Looking at: " + path);
-			if(path.toString().endsWith(".bundle")) {
-				System.out.println("Matched: " + path);
+		File rootFile = rootPath.toFile();
+		if(!rootFile.exists())  {
+			System.out.println("Warning: Raw export path does not exist: " + rootPath);
+			return; //Allow continue
+		}
+		
+		if(rootFile.isDirectory()) {
+			flattenDirStructure(rootPath, flattenedPath);
+		} else if (rootFile.getName().toLowerCase().endsWith(".tar")) {
+			extractTarFile(rootPath, flattenedPath);
+			//No exception means we can now delete the file.
+			System.out.println("Deleting waw export file: " + rootPath);
+			rootFile.delete();
+		} else {
+			System.out.println("Unrecognized raw export file. Expected a .tar file, got: " + rootPath);
+		}
+	}
+	
+	private static void extractTarFile(Path rootPath, Path flattenedPath) throws IOException {
+		try (FileInputStream fis = new FileInputStream(rootPath.toString());
+				BufferedInputStream bis = new BufferedInputStream(fis, TAR_BUFFER_SIZE);
+				TarArchiveInputStream tarStream = new TarArchiveInputStream(fis)) {
+	
+			System.out.println("Reading tar file: " + rootPath);
+			TarArchiveEntry entry;
+		    while ((entry = tarStream.getNextEntry()) != null) {
+		    	System.out.println("Looking at: " + entry.getName());
+		    	if(entry.isFile() && entry.getName().endsWith(".bundle")) {
+		    		System.out.println("Matched bundle file: " + entry.getName());
+		    		
+		    		Path entryPath = Paths.get(entry.getName()).getFileName();
+		    		Path target = Paths.get(flattenedPath.toString(), entryPath.toString());
+		    		File targetFile = target.toFile();
+		    		
+		    		if (targetFile.exists()) {
+						if(!targetFile.isDirectory() && (targetFile.length() == entry.getRealSize())) {
+							System.out.println("Bundle file already exists, skipping: " + target);
+						} else {
+							System.out.println("Bundle file conflicts with existing file or directory: " + target);
+							throw new FileAlreadyExistsException(target.toString());
+						}
+		    		} else {
+		    			System.out.println("Copying bundle file "  + entry.getName() + " to path " + flattenedPath);
+			    		Files.copy(tarStream, target);
+		    		}
+		    	}
+		    }
+		}
+	}
+	
+	private static void flattenDirStructure(Path rootPath, Path flattenedPath) throws IOException {
+		//Walk the entire directory tree, up to 4 deep, looking for bundle files
+		System.out.println("Walking directory tree, starting at: " + rootPath);
+		Files.find(rootPath, 4, (treePath, attr) -> {
+			System.out.println("Looking at: " + treePath);
+			if(treePath.toString().toLowerCase().endsWith(".bundle")) {
+				System.out.println("Matched bundle file: " + treePath);
 				return true;
-				
 			}
 			return false;
-		}).forEach(path -> {
-			File file = path.toFile();
-			System.out.println("Moving: " + path);
+		}).forEach(matchedPath -> {
+			//Move all the bundle files that we matched to the flattened path
+			System.out.println("Moving bundle file " + matchedPath + " to path " + flattenedPath);
+			File matchedFile = matchedPath.toFile();
+			Path target = Paths.get(flattenedPath.toString(), matchedFile.getName());
 			try {
-				Files.move(path, Paths.get(BUNDLE_PATH, file.getName()));
+				Files.move(matchedPath,target);
+			} catch (FileAlreadyExistsException e) {
+				File targetFile = target.toFile();
+				if(!targetFile.isDirectory() && (targetFile.length() == matchedFile.length())) {
+					System.out.println("Bundle file already exists, skipping: " + target);
+				} else {
+					System.out.println("Bundle file conflicts with existing file or directory: " + target);
+					throw new RuntimeException(e);
+				}
 			} catch (IOException e) {
-				e.printStackTrace();
+				throw new RuntimeException(e);
 			}
 		});
 	}
