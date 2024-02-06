@@ -20,7 +20,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
-import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
+import org.apache.commons.compress.archivers.tar.WorkAroundTarArchiveInputStream;
 import org.apache.commons.io.FileUtils;
 
 public class GitUnbundle {
@@ -223,7 +223,7 @@ public class GitUnbundle {
 					//if the number of concurrent threads is high
 					try (FileInputStream fis = new FileInputStream(rootPath.toString());
 							BufferedInputStream bis = new BufferedInputStream(fis, TAR_BUFFER_SIZE);
-							TarArchiveInputStream tarStream = new TarArchiveInputStream(fis)) {
+							WorkAroundTarArchiveInputStream tarStream = new WorkAroundTarArchiveInputStream(bis, fis, rootPath)) {
 				
 						System.out.println(threadId + ":: Reading tar file: " + rootPath);
 						TarArchiveEntry entry;
