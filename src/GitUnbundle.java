@@ -26,15 +26,15 @@ import org.apache.commons.io.FileUtils;
 public class GitUnbundle {
 
 	
-	private static final String RAW_EXPORT_PATH     = "C:\\git\\test\\test.tar";
-	private static final String BUNDLE_PATH         = "C:\\git\\";
-	private static final String UNBUNDLED_PATH      = "C:\\git\\repos\\";
+	private static final String RAW_EXPORT_PATH     = "C:\\dev\\git\\extract.tar";
+	private static final String BUNDLE_PATH         = "C:\\dev\\git\\bundles\\";
+	private static final String UNBUNDLED_PATH      = "C:\\dev\\git\\repos\\";
 	
 	private static final Path rawExportPath = Paths.get(RAW_EXPORT_PATH);
 	private static final Path bundlePath    = Paths.get(BUNDLE_PATH); 
 	private static final Path unbundledPath = Paths.get(UNBUNDLED_PATH);
 	
-	private static final int                THREAD_COUNT = 32;
+	private static final int                THREAD_COUNT = 10;
 	private static final ThreadPoolExecutor THREAD_POOL = new ThreadPoolExecutor(THREAD_COUNT,THREAD_COUNT,100l,TimeUnit.SECONDS, new LinkedBlockingDeque<Runnable>());
 	private static final AtomicInteger      THREAD_ID_COUNTER = new AtomicInteger(0);
 	
@@ -198,7 +198,7 @@ public class GitUnbundle {
 		} else if (rootFile.getName().toLowerCase().endsWith(".tar")) {
 			extractTarFile(rootPath, flattenedPath);
 			//No exception means we can now delete the file.
-			System.out.println("Deleting waw export file: " + rootPath);
+			System.out.println("Deleting raw export file: " + rootPath);
 			rootFile.delete();
 		} else {
 			System.out.println("Unrecognized raw export file. Expected a .tar file, got: " + rootPath);
@@ -225,15 +225,15 @@ public class GitUnbundle {
 							BufferedInputStream bis = new BufferedInputStream(fis, TAR_BUFFER_SIZE);
 							TarArchiveInputStream tarStream = new TarArchiveInputStream(fis)) {
 				
-						System.out.println("Reading tar file: " + rootPath);
+						System.out.println(threadId + ":: Reading tar file: " + rootPath);
 						TarArchiveEntry entry;
 					    while ((entry = tarStream.getNextEntry()) != null) {
 					    	
 					    	if(!entrySet.add(entry.getName())) continue; //Another thread took this file
 					    			
-					    	System.out.println("Looking at: " + entry.getName());
+					    	System.out.println(threadId + ":: Looking at: " + entry.getName());
 					    	if(entry.isFile() && entry.getName().endsWith(".bundle")) {
-					    		System.out.println("Matched bundle file: " + entry.getName());
+					    		System.out.println(threadId + ":: Matched bundle file: " + entry.getName() + " " + entry.getRealSize() + " bytes");
 					    		
 					    		//Found a match, now extract it from the tar file
 					    		Path entryPath = Paths.get(entry.getName()).getFileName();
@@ -241,20 +241,24 @@ public class GitUnbundle {
 					    		File targetFile = target.toFile();
 					    		
 					    		if (targetFile.exists()) {
-									if(!targetFile.isDirectory() && (targetFile.length() == entry.getRealSize())) {
-										System.out.println("Bundle file already exists, skipping: " + target);
-									} else {
-										System.out.println("Bundle file conflicts with existing file or directory: " + target);
+					    			if(targetFile.isDirectory()) {
+					    				System.out.println(threadId + ":: Bundle file conflicts with an existing directory: " + target);
 										throw new FileAlreadyExistsException(target.toString());
+					    			} else if (targetFile.length() == entry.getRealSize()) {
+										System.out.println(threadId + ":: Bundle file already exists, skipping: " + target);
+										continue;
+									} else {
+										System.out.println(threadId + ":: Bundle file conflicts with existing file, deleting: " + target);
+										targetFile.delete();
 									}
-					    		} else {
-					    			System.out.println("Copying bundle file "  + entry.getName() + " to path " + flattenedPath);
-						    		Files.copy(tarStream, target);
 					    		}
+					    		
+				    			System.out.println(threadId + ":: Copying bundle file "  + entry.getName() + " to path " + flattenedPath);
+					    		Files.copy(tarStream, target);
 					    	}
 					    }
 					} catch(Throwable t) {
-						System.out.println(threadId + ":: ERROR tar file extraction: " + t.getMessage());
+						System.out.println(threadId + ":: ERROR with tar file extraction: " + t.getMessage());
 						throw new RuntimeException(t); //Don't keep processing
 					}
 				}
