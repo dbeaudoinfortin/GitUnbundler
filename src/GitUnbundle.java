@@ -76,25 +76,30 @@ public class GitUnbundle {
 				public void run() {
 					int threadId = THREAD_ID_COUNTER.getAndIncrement();
 				 
+					System.out.println(threadId + ":: Creating git repo in: " + unbundledDir);
 					try {
-						System.out.println(threadId + ":: Creating git repo in: " + unbundledDir);
-						final String cmd = "git init";
-						
+						String cmd = "git init";
 						if(runProcess(threadId, cmd, unbundledDir) > 0) {
 							System.out.println(threadId + ":: Git repo creation failed in: " + unbundledDir);
 							return;
-						} else {
-							System.out.println(threadId + ":: Git repo created in: " + unbundledDir);
 						}
-					 } catch (Throwable t) {
+						//The smudge filter often causes problems and is unneeded since we know our repo is clean
+						cmd = "git lfs install --skip-smudge";
+						if(runProcess(threadId, cmd, unbundledDir) > 0){
+							System.out.println(threadId + ":: Failed to disable smudge filter in: " + unbundledDir);
+							return;
+						}
+						
+					} catch (Throwable t) {
 						System.out.println(threadId + ":: ERROR during git init command: " + t.getMessage());
 						t.printStackTrace();
 						return; //Don't throw a runtime exception, let the other threads run
-					 }
-				 
-					 try {
-							
-						System.out.println(threadId + ":: Unbundling file: " + bundleFile);
+					}
+					
+					System.out.println(threadId + ":: Git repo created in: " + unbundledDir);
+					System.out.println(threadId + ":: Unbundling file: " + bundleFile);
+					
+					try {
 						final String cmd = "git pull --progress \"" + bundleFile.getAbsolutePath() + "\"";
 						if(runProcess(threadId, cmd, unbundledDir) > 0) {
 							System.out.println(threadId + ":: Unbundling failed for bundle: " + bundleFile);
